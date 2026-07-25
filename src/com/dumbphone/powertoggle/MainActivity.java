@@ -16,6 +16,7 @@ import android.net.wifi.WifiManager;
 import android.os.BatteryManager;
 import android.os.Bundle;
 import android.os.PowerManager;
+import android.provider.Settings;
 
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -36,13 +37,15 @@ import java.util.List;
 public final class MainActivity extends Activity {
     private static final String PREFS = "toggle_state";
     private static final String ACTIVE = "active";
+    private static final String SELECT_AIRPLANE = "select_airplane";
     private static final String SELECT_WIFI = "select_wifi";
     private static final String SELECT_BLUETOOTH = "select_bluetooth";
     private static final String SELECT_SAVER = "select_saver";
 
-    private static final int WIFI = 0;
-    private static final int BLUETOOTH = 1;
-    private static final int SAVER = 2;
+    private static final int AIRPLANE = 0;
+    private static final int WIFI = 1;
+    private static final int BLUETOOTH = 2;
+    private static final int SAVER = 3;
 
     private final List<SettingEntry> entries = new ArrayList<>();
     private SharedPreferences prefs;
@@ -69,7 +72,11 @@ public final class MainActivity extends Activity {
     private final BroadcastReceiver radioReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
             String action = intent.getAction();
-            if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
+            if (Intent.ACTION_AIRPLANE_MODE_CHANGED.equals(action)) {
+                entries.get(AIRPLANE).enabled = intent.getBooleanExtra("state",
+                        readAirplaneMode());
+                refreshVisibleRow(AIRPLANE);
+            } else if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
                 int state = intent.getIntExtra(
                         BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR);
                 if (state == BluetoothAdapter.STATE_ON || state == BluetoothAdapter.STATE_OFF) {
@@ -127,7 +134,7 @@ public final class MainActivity extends Activity {
         titleRow.addView(title, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         root.addView(titleRow, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(43)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
 
         status = textView("Ready", 13, Gravity.CENTER);
         status.setTextColor(Color.WHITE);
@@ -136,7 +143,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams statusLayout = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         statusLayout.gravity = Gravity.CENTER_HORIZONTAL;
-        statusLayout.setMargins(0, 0, 0, dp(26));
+        statusLayout.setMargins(0, 0, 0, dp(6));
         root.addView(status, statusLayout);
 
         listView = new ListView(this);
@@ -155,7 +162,7 @@ public final class MainActivity extends Activity {
             }
         });
         root.addView(listView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(144)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(176)));
 
         chargingWarning = textView("Battery Saver unavailable on USB", 13, Gravity.CENTER);
         chargingWarning.setTextColor(Color.WHITE);
@@ -187,6 +194,7 @@ public final class MainActivity extends Activity {
         if (battery != null) updateChargingWarning(isExternallyPowered(battery));
 
         IntentFilter radios = new IntentFilter();
+        radios.addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED);
         radios.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
         radios.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
         registerReceiver(radioReceiver, radios);
@@ -257,6 +265,8 @@ public final class MainActivity extends Activity {
 
     private void loadEntries() {
         entries.clear();
+        entries.add(new SettingEntry(AIRPLANE, "Airplane Mode", R.drawable.ic_airplane,
+                prefs.getBoolean(SELECT_AIRPLANE, true)));
         entries.add(new SettingEntry(WIFI, "Wi-Fi", R.drawable.ic_wifi,
                 prefs.getBoolean(SELECT_WIFI, true)));
         entries.add(new SettingEntry(BLUETOOTH, "Bluetooth", R.drawable.ic_bluetooth,
@@ -281,9 +291,15 @@ public final class MainActivity extends Activity {
         BluetoothAdapter bluetooth = BluetoothAdapter.getDefaultAdapter();
         PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
         return new boolean[]{
+                readAirplaneMode(),
                 wifi != null && wifi.isWifiEnabled(),
                 bluetooth != null && bluetooth.isEnabled(),
                 power != null && power.isPowerSaveMode()};
+    }
+
+    private boolean readAirplaneMode() {
+        return Settings.Global.getInt(getContentResolver(),
+                Settings.Global.AIRPLANE_MODE_ON, 0) == 1;
     }
 
     private void updateReadyStatus() {
@@ -309,6 +325,7 @@ public final class MainActivity extends Activity {
 
     private void saveOptions() {
         prefs.edit()
+                .putBoolean(SELECT_AIRPLANE, entries.get(AIRPLANE).selected)
                 .putBoolean(SELECT_WIFI, entries.get(WIFI).selected)
                 .putBoolean(SELECT_BLUETOOTH, entries.get(BLUETOOTH).selected)
                 .putBoolean(SELECT_SAVER, entries.get(SAVER).selected)
@@ -322,6 +339,7 @@ public final class MainActivity extends Activity {
     }
 
     private void cancelConfig() {
+        entries.get(AIRPLANE).selected = prefs.getBoolean(SELECT_AIRPLANE, true);
         entries.get(WIFI).selected = prefs.getBoolean(SELECT_WIFI, true);
         entries.get(BLUETOOTH).selected = prefs.getBoolean(SELECT_BLUETOOTH, true);
         entries.get(SAVER).selected = prefs.getBoolean(SELECT_SAVER, true);
@@ -359,20 +377,21 @@ public final class MainActivity extends Activity {
         }
         boolean active = prefs.getBoolean(ACTIVE, false);
         boolean[] current = readStates();
+        boolean airplane = entries.get(AIRPLANE).selected;
         boolean wifi = entries.get(WIFI).selected;
         boolean bluetooth = entries.get(BLUETOOTH).selected;
         boolean saver = entries.get(SAVER).selected;
         boolean skipSaverForCharging = PowerPrecondition.shouldSkipLowPower(
                 !active, isExternallyPowered(), saver);
         boolean applySaver = saver && !skipSaverForCharging;
-        if (skipSaverForCharging && !wifi && !bluetooth) {
+        if (skipSaverForCharging && !airplane && !wifi && !bluetooth) {
             showChargingBlock();
             return;
         }
         ToggleState state = active ? ToggleState.active(true, true) : ToggleState.inactive();
         TogglePlan plan = state.plan(
-                current[WIFI], current[BLUETOOTH], current[SAVER],
-                wifi, bluetooth, applySaver);
+                current[AIRPLANE], current[WIFI], current[BLUETOOTH], current[SAVER],
+                airplane, wifi, bluetooth, applySaver);
         String message = active ? "Normal Mode Applied" : "Low Power Applied";
         if (skipSaverForCharging) message += " • Saver Skipped";
         runPlan(plan, true, message);
@@ -380,7 +399,8 @@ public final class MainActivity extends Activity {
 
     private void toggleOne(SettingEntry entry) {
         boolean[] current = readStates();
-        boolean toLowPowerState = entry.kind == SAVER ? !current[SAVER] : current[entry.kind];
+        boolean toLowPowerState = entry.kind == SAVER || entry.kind == AIRPLANE
+                ? !current[entry.kind] : current[entry.kind];
         if (entry.kind == SAVER && toLowPowerState && isExternallyPowered()) {
             showChargingBlock();
             return;
@@ -388,7 +408,8 @@ public final class MainActivity extends Activity {
         ToggleState state = toLowPowerState
                 ? ToggleState.inactive() : ToggleState.active(true, true);
         TogglePlan plan = state.plan(
-                current[WIFI], current[BLUETOOTH], current[SAVER],
+                current[AIRPLANE], current[WIFI], current[BLUETOOTH], current[SAVER],
+                entry.kind == AIRPLANE,
                 entry.kind == WIFI,
                 entry.kind == BLUETOOTH,
                 entry.kind == SAVER);
@@ -631,25 +652,25 @@ public final class MainActivity extends Activity {
             super(MainActivity.this);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(9), dp(4), dp(6), dp(4));
-            setMinimumHeight(dp(48));
+            setPadding(dp(9), dp(2), dp(6), dp(2));
+            setMinimumHeight(dp(44));
             setBackground(rowBackground());
 
             icon = new ImageView(MainActivity.this);
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            addView(icon, new LinearLayout.LayoutParams(dp(36), dp(36)));
+            addView(icon, new LinearLayout.LayoutParams(dp(32), dp(32)));
 
-            label = textView("", 18, Gravity.CENTER_VERTICAL);
+            label = textView("", 17, Gravity.CENTER_VERTICAL);
             label.setTextColor(rowTextColors());
             label.setDuplicateParentStateEnabled(true);
             label.setPadding(dp(8), 0, dp(3), 0);
-            addView(label, new LinearLayout.LayoutParams(0, dp(38), 1f));
+            addView(label, new LinearLayout.LayoutParams(0, dp(34), 1f));
 
             state = textView("", 14, Gravity.CENTER);
             state.setTextColor(rowTextColors());
             state.setDuplicateParentStateEnabled(true);
             state.setPadding(dp(2), 0, dp(2), 0);
-            addView(state, new LinearLayout.LayoutParams(dp(40), dp(36)));
+            addView(state, new LinearLayout.LayoutParams(dp(40), dp(32)));
 
             checkbox = new CheckBox(MainActivity.this);
             checkbox.setDuplicateParentStateEnabled(true);
@@ -657,7 +678,7 @@ public final class MainActivity extends Activity {
             checkbox.setGravity(Gravity.CENTER);
             checkbox.setClickable(false);
             checkbox.setFocusable(false);
-            addView(checkbox, new LinearLayout.LayoutParams(dp(34), dp(34)));
+            addView(checkbox, new LinearLayout.LayoutParams(dp(34), dp(32)));
         }
 
         void bind(SettingEntry entry) {

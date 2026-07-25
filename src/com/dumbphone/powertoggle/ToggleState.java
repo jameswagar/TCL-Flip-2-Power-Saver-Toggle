@@ -36,21 +36,39 @@ public final class ToggleState {
                            boolean configureWifi,
                            boolean configureBluetooth,
                            boolean configureLowPower) {
+        return plan(false, currentWifiEnabled, currentBluetoothEnabled, currentLowPowerEnabled,
+                false, configureWifi, configureBluetooth, configureLowPower);
+    }
+
+    public TogglePlan plan(boolean currentAirplaneEnabled,
+                           boolean currentWifiEnabled,
+                           boolean currentBluetoothEnabled,
+                           boolean currentLowPowerEnabled,
+                           boolean configureAirplane,
+                           boolean configureWifi,
+                           boolean configureBluetooth,
+                           boolean configureLowPower) {
         if (!active) {
             ToggleState committed = active(currentWifiEnabled, currentBluetoothEnabled);
             return new TogglePlan(true,
+                    configureAirplane ? true : currentAirplaneEnabled,
                     configureWifi ? false : currentWifiEnabled,
                     configureBluetooth ? false : currentBluetoothEnabled,
                     configureLowPower ? true : currentLowPowerEnabled,
                     committed, this,
-                    currentWifiEnabled, currentBluetoothEnabled, currentLowPowerEnabled);
+                    currentAirplaneEnabled,
+                    currentWifiEnabled, currentBluetoothEnabled, currentLowPowerEnabled,
+                    configureAirplane, configureWifi, configureBluetooth, configureLowPower);
         }
         return new TogglePlan(false,
+                configureAirplane ? false : currentAirplaneEnabled,
                 configureWifi ? true : currentWifiEnabled,
                 configureBluetooth ? true : currentBluetoothEnabled,
                 configureLowPower ? false : currentLowPowerEnabled,
                 inactive(), this,
-                currentWifiEnabled, currentBluetoothEnabled, currentLowPowerEnabled);
+                currentAirplaneEnabled,
+                currentWifiEnabled, currentBluetoothEnabled, currentLowPowerEnabled,
+                configureAirplane, configureWifi, configureBluetooth, configureLowPower);
     }
 
     public boolean isActive() {
