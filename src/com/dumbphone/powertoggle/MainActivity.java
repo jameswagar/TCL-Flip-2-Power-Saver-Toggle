@@ -41,11 +41,18 @@ public final class MainActivity extends Activity {
     private static final String SELECT_WIFI = "select_wifi";
     private static final String SELECT_BLUETOOTH = "select_bluetooth";
     private static final String SELECT_SAVER = "select_saver";
+    private static final String TOGGLE_SELECTED_MODE = "toggle_selected_mode";
+    private static final String ACTIVE_SELECTION_VALID = "active_selection_valid";
+    private static final String ACTIVE_AIRPLANE = "active_airplane";
+    private static final String ACTIVE_WIFI = "active_wifi";
+    private static final String ACTIVE_BLUETOOTH = "active_bluetooth";
+    private static final String ACTIVE_SAVER = "active_saver";
 
     private static final int AIRPLANE = 0;
     private static final int WIFI = 1;
     private static final int BLUETOOTH = 2;
     private static final int SAVER = 3;
+    private static final int MODE = 4;
 
     private final List<SettingEntry> entries = new ArrayList<>();
     private SharedPreferences prefs;
@@ -55,16 +62,17 @@ public final class MainActivity extends Activity {
     private TextView chargingWarning;
 
     private SettingAdapter adapter;
-    private boolean configMode;
     private boolean busy;
     private boolean centerDown;
-    private boolean longPressTriggered;
     private boolean batteryReceiverRegistered;
     private boolean radioReceiverRegistered;
     private int centerKeyCode = -1;
 
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_POWER_DISCONNECTED.equals(intent.getAction())) {
+                BatterySaverPowerReceiver.activateIfArmedAsync(context);
+            }
             updateChargingWarning(isExternallyPowered(intent));
         }
     };
@@ -91,6 +99,10 @@ public final class MainActivity extends Activity {
                     entries.get(WIFI).enabled = state == WifiManager.WIFI_STATE_ENABLED;
                     refreshVisibleRow(WIFI);
                 }
+            } else if (PowerManager.ACTION_POWER_SAVE_MODE_CHANGED.equals(action)) {
+                PowerManager power = (PowerManager) getSystemService(Context.POWER_SERVICE);
+                entries.get(SAVER).enabled = power != null && power.isPowerSaveMode();
+                refreshVisibleRow(SAVER);
             }
         }
     };
@@ -103,10 +115,16 @@ public final class MainActivity extends Activity {
         configureWindow();
         buildUi();
         loadEntries();
+        ensureActiveSelectionSnapshot();
         refreshStates();
         listView.post(new Runnable() {
             @Override public void run() {
-                if (quickAction != null) quickAction.requestFocus();
+                if (isToggleSelectedMode() && quickAction != null) {
+                    quickAction.requestFocus();
+                } else {
+                    listView.setSelection(0);
+                    listView.requestFocus();
+                }
             }
         });
     }
@@ -152,17 +170,8 @@ public final class MainActivity extends Activity {
         listView.setCacheColorHint(Color.TRANSPARENT);
         listView.setBackgroundColor(Color.TRANSPARENT);
         listView.setSelector(new ColorDrawable(Color.TRANSPARENT));
-        listView.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
-            @Override
-            public void onItemClick(android.widget.AdapterView<?> parent,
-                                    View view,
-                                    int position,
-                                    long id) {
-                performRowAction(position);
-            }
-        });
         root.addView(listView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(176)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(175)));
 
         chargingWarning = textView("Battery Saver unavailable on USB", 13, Gravity.CENTER);
         chargingWarning.setTextColor(Color.WHITE);
@@ -188,8 +197,9 @@ public final class MainActivity extends Activity {
     @Override
     protected void onStart() {
         super.onStart();
-        Intent battery = registerReceiver(
-                batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        IntentFilter batteryEvents = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+        batteryEvents.addAction(Intent.ACTION_POWER_DISCONNECTED);
+        Intent battery = registerReceiver(batteryReceiver, batteryEvents);
         batteryReceiverRegistered = true;
         if (battery != null) updateChargingWarning(isExternallyPowered(battery));
 
@@ -197,6 +207,7 @@ public final class MainActivity extends Activity {
         radios.addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED);
         radios.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
         radios.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
+        radios.addAction(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED);
         registerReceiver(radioReceiver, radios);
         radioReceiverRegistered = true;
         refreshStates();
@@ -238,7 +249,7 @@ public final class MainActivity extends Activity {
                     String.class,
                     String.class,
                     List.class)
-                    .invoke(menuBar, "", "Toggle Selected Options", "", null);
+                    .invoke(menuBar, "", "Toggle Selected Settings", "", null);
 
             ViewGroup bar = (ViewGroup) menuBar;
             View barBackground = bar.getChildAt(0);
@@ -273,16 +284,22 @@ public final class MainActivity extends Activity {
                 prefs.getBoolean(SELECT_BLUETOOTH, true)));
         entries.add(new SettingEntry(SAVER, "Battery Saver", R.drawable.ic_battery,
                 prefs.getBoolean(SELECT_SAVER, true)));
+        boolean toggleSelected = isToggleSelectedMode();
+        entries.add(new SettingEntry(MODE, "Toggle Selected", R.drawable.ic_toggle_selected,
+                toggleSelected));
         adapter = new SettingAdapter();
         listView.setAdapter(adapter);
         listView.setSelection(0);
+        updateActionAvailability();
     }
 
     private void refreshStates() {
         boolean[] states = readStates();
-        for (SettingEntry entry : entries) entry.enabled = states[entry.kind];
+        for (SettingEntry entry : entries) {
+            entry.enabled = entry.kind == MODE ? isToggleSelectedMode() : states[entry.kind];
+        }
         if (adapter != null) adapter.notifyDataSetChanged();
-        if (!configMode && !busy) updateReadyStatus();
+        if (!busy) updateReadyStatus();
     }
 
     private boolean[] readStates() {
@@ -304,107 +321,194 @@ public final class MainActivity extends Activity {
 
     private void updateReadyStatus() {
         int selected = selectedCount();
-        status.setText("Ready • " + selected + " Selected Option" + (selected == 1 ? "" : "s"));
+        boolean active = prefs.getBoolean(ACTIVE, false);
+        status.setText(OptionInteraction.readyStatus(
+                isToggleSelectedMode(), active, selected));
+        if (quickAction != null) {
+            quickAction.setText(OptionInteraction.actionLabel(selected));
+        }
+    }
+
+    private void showTransientStatus(final String message) {
+        status.setText(message);
+        listView.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!busy && message.equals(status.getText().toString())) {
+                    updateReadyStatus();
+                }
+            }
+        }, 2000);
     }
 
     private int selectedCount() {
         int count = 0;
-        for (SettingEntry entry : entries) if (entry.selected) count++;
+        for (SettingEntry entry : entries) {
+            if (entry.kind != MODE && entry.selected) count++;
+        }
         return count;
     }
 
-    private void enterConfigMode() {
-        if (busy || configMode) return;
-        configMode = true;
-        status.setText("Choose Quick Toggle Options");
-        quickAction.setText("Save Options");
-        adapter.notifyDataSetChanged();
-        listView.setSelection(0);
-        listView.requestFocus();
+    private boolean isToggleSelectedMode() {
+        return prefs.getBoolean(TOGGLE_SELECTED_MODE, true);
     }
 
-    private void saveOptions() {
+    private void updateActionAvailability() {
+        if (quickAction == null) return;
+        boolean enabled = isToggleSelectedMode();
+        quickAction.setEnabled(enabled);
+        quickAction.setAlpha(enabled ? 1f : 0.35f);
+        if (!enabled && quickAction.hasFocus()) {
+            listView.setSelection(MODE);
+            listView.requestFocus();
+        }
+    }
+
+    private void persistSelections() {
         prefs.edit()
                 .putBoolean(SELECT_AIRPLANE, entries.get(AIRPLANE).selected)
                 .putBoolean(SELECT_WIFI, entries.get(WIFI).selected)
                 .putBoolean(SELECT_BLUETOOTH, entries.get(BLUETOOTH).selected)
                 .putBoolean(SELECT_SAVER, entries.get(SAVER).selected)
                 .apply();
-        configMode = false;
-        quickAction.setText("Toggle Selected Options");
-        adapter.notifyDataSetChanged();
-        updateReadyStatus();
-        Toast.makeText(this, "Quick options saved", Toast.LENGTH_SHORT).show();
-        quickAction.requestFocus();
     }
 
-    private void cancelConfig() {
-        entries.get(AIRPLANE).selected = prefs.getBoolean(SELECT_AIRPLANE, true);
-        entries.get(WIFI).selected = prefs.getBoolean(SELECT_WIFI, true);
-        entries.get(BLUETOOTH).selected = prefs.getBoolean(SELECT_BLUETOOTH, true);
-        entries.get(SAVER).selected = prefs.getBoolean(SELECT_SAVER, true);
-        configMode = false;
-        quickAction.setText("Toggle Selected Options");
-        adapter.notifyDataSetChanged();
-        updateReadyStatus();
-        quickAction.requestFocus();
+    private ActiveSelectionSnapshot currentSelectionSnapshot() {
+        return ActiveSelectionSnapshot.capture(new boolean[]{
+                entries.get(AIRPLANE).selected,
+                entries.get(WIFI).selected,
+                entries.get(BLUETOOTH).selected,
+                entries.get(SAVER).selected});
+    }
+
+    private ActiveSelectionSnapshot activeSelectionSnapshot() {
+        if (!prefs.getBoolean(ACTIVE_SELECTION_VALID, false)) {
+            return currentSelectionSnapshot();
+        }
+        return ActiveSelectionSnapshot.capture(new boolean[]{
+                prefs.getBoolean(ACTIVE_AIRPLANE, entries.get(AIRPLANE).selected),
+                prefs.getBoolean(ACTIVE_WIFI, entries.get(WIFI).selected),
+                prefs.getBoolean(ACTIVE_BLUETOOTH, entries.get(BLUETOOTH).selected),
+                prefs.getBoolean(ACTIVE_SAVER, entries.get(SAVER).selected)});
+    }
+
+    private void ensureActiveSelectionSnapshot() {
+        if (!prefs.getBoolean(ACTIVE, false)
+                || prefs.getBoolean(ACTIVE_SELECTION_VALID, false)) {
+            return;
+        }
+        ActiveSelectionSnapshot snapshot = currentSelectionSnapshot();
+        prefs.edit()
+                .putBoolean(ACTIVE_SELECTION_VALID, true)
+                .putBoolean(ACTIVE_AIRPLANE, snapshot.selected(AIRPLANE))
+                .putBoolean(ACTIVE_WIFI, snapshot.selected(WIFI))
+                .putBoolean(ACTIVE_BLUETOOTH, snapshot.selected(BLUETOOTH))
+                .putBoolean(ACTIVE_SAVER, snapshot.selected(SAVER))
+                .apply();
     }
 
     private void performRowAction(int position) {
-        if (busy || position < 0 || position >= entries.size()) return;
-        if (configMode) {
-            SettingEntry entry = entries.get(position);
-            entry.selected = !entry.selected;
-            View selectedRow = listView.getSelectedView();
-            if (selectedRow instanceof SettingRow) {
-                ((SettingRow) selectedRow).bind(entry);
-                selectedRow.setSelected(true);
-            } else {
-                adapter.notifyDataSetChanged();
-                listView.setSelection(position);
-            }
-            listView.requestFocus();
-            status.setText(selectedCount() + " Selected Option" + (selectedCount() == 1 ? "" : "s"));
-        } else {
-            toggleOne(entries.get(position));
+        if (position < 0 || position >= entries.size()) return;
+        boolean active = prefs.getBoolean(ACTIVE, false);
+        boolean toggleSelectedMode = isToggleSelectedMode();
+        OptionInteraction.RowAction action = OptionInteraction.rowAction(
+                busy, active, toggleSelectedMode, position == MODE);
+        if (action == OptionInteraction.RowAction.BLOCKED_BUSY) return;
+        if (action == OptionInteraction.RowAction.BLOCKED_ACTIVE) {
+            showTransientStatus("Restore Selected Settings First");
+            return;
         }
+        if (action == OptionInteraction.RowAction.RESTORE_AND_DISABLE_MODE) {
+            toggleQuickOptions(true);
+            return;
+        }
+        if (action == OptionInteraction.RowAction.TOGGLE_MODE) {
+            boolean enabled = !toggleSelectedMode;
+            prefs.edit().putBoolean(TOGGLE_SELECTED_MODE, enabled).apply();
+            SettingEntry mode = entries.get(MODE);
+            mode.selected = enabled;
+            mode.enabled = enabled;
+            adapter.notifyDataSetChanged();
+            listView.setSelection(MODE);
+            updateActionAvailability();
+            updateReadyStatus();
+            listView.requestFocus();
+            return;
+        }
+        if (action == OptionInteraction.RowAction.TOGGLE_INDIVIDUAL) {
+            toggleOne(entries.get(position));
+            return;
+        }
+
+        SettingEntry entry = entries.get(position);
+        entry.selected = !entry.selected;
+        persistSelections();
+        View selectedRow = listView.getSelectedView();
+        if (selectedRow instanceof SettingRow) {
+            ((SettingRow) selectedRow).bind(entry);
+            selectedRow.setSelected(true);
+        } else {
+            adapter.notifyDataSetChanged();
+            listView.setSelection(position);
+        }
+        listView.requestFocus();
+        updateReadyStatus();
     }
 
     private void toggleQuickOptions() {
-        if (selectedCount() == 0) {
-            status.setText("Hold OK to choose options");
+        toggleQuickOptions(false);
+    }
+
+    private void toggleQuickOptions(boolean disableModeAfterRestore) {
+        if (!isToggleSelectedMode()) {
+            status.setText("Toggle Selected Is Off");
             return;
         }
         boolean active = prefs.getBoolean(ACTIVE, false);
-        boolean[] current = readStates();
-        boolean airplane = entries.get(AIRPLANE).selected;
-        boolean wifi = entries.get(WIFI).selected;
-        boolean bluetooth = entries.get(BLUETOOTH).selected;
-        boolean saver = entries.get(SAVER).selected;
-        boolean skipSaverForCharging = PowerPrecondition.shouldSkipLowPower(
-                !active, isExternallyPowered(), saver);
-        boolean applySaver = saver && !skipSaverForCharging;
-        if (skipSaverForCharging && !airplane && !wifi && !bluetooth) {
-            showChargingBlock();
+        OptionInteraction.BundleAction action = OptionInteraction.bundleAction(
+                active, selectedCount());
+        if (action == OptionInteraction.BundleAction.NO_SELECTION) {
+            status.setText("Select At Least One Item");
             return;
         }
+        boolean[] current = readStates();
+        ActiveSelectionSnapshot bundleSelection = active
+                ? activeSelectionSnapshot() : currentSelectionSnapshot();
+        boolean airplane = bundleSelection.selected(AIRPLANE);
+        boolean wifi = bundleSelection.selected(WIFI);
+        boolean bluetooth = bundleSelection.selected(BLUETOOTH);
+        boolean saver = bundleSelection.selected(SAVER);
+        boolean externallyPowered = isExternallyPowered();
+        boolean changedByApp = prefs.getBoolean(DeferredBatterySaver.CHANGED_BY_APP, false);
+        DeferredBatterySaver.Decision saverDecision = DeferredBatterySaver.bundle(
+                active, saver, externallyPowered, current[SAVER], changedByApp);
+        boolean configureSaver = saverDecision.configureSaver();
         ToggleState state = active ? ToggleState.active(true, true) : ToggleState.inactive();
         TogglePlan plan = state.plan(
                 current[AIRPLANE], current[WIFI], current[BLUETOOTH], current[SAVER],
-                airplane, wifi, bluetooth, applySaver);
-        String message = active ? "Normal Mode Applied" : "Low Power Applied";
-        if (skipSaverForCharging) message += " • Saver Skipped";
-        runPlan(plan, true, message);
+                airplane, wifi, bluetooth, configureSaver);
+        String message = active ? "Normal Power Mode Applied" : "Low Power Applied";
+        if (!active && saver && externallyPowered) message += " • Saver Armed";
+        runPlan(plan, true, message, -1, false, saver ? saverDecision : null,
+                active ? null : bundleSelection, disableModeAfterRestore && active);
     }
 
     private void toggleOne(SettingEntry entry) {
         boolean[] current = readStates();
-        boolean toLowPowerState = entry.kind == SAVER || entry.kind == AIRPLANE
-                ? !current[entry.kind] : current[entry.kind];
-        if (entry.kind == SAVER && toLowPowerState && isExternallyPowered()) {
-            showChargingBlock();
+        if (entry.kind == SAVER && isExternallyPowered()) {
+            boolean armed = prefs.getBoolean(DeferredBatterySaver.ARMED, false);
+            boolean arm = DeferredBatterySaver.toggleArmed(armed);
+            prefs.edit()
+                    .putBoolean(DeferredBatterySaver.ARMED, arm)
+                    .putBoolean(DeferredBatterySaver.CHANGED_BY_APP, false)
+                    .apply();
+            refreshVisibleRow(SAVER);
+            showTransientStatus(arm ? "Battery Saver Armed" : "Battery Saver Disarmed");
+            Toast.makeText(this, status.getText(), Toast.LENGTH_SHORT).show();
             return;
         }
+        boolean targetEnabled = !current[entry.kind];
+        boolean toLowPowerState = entry.kind == SAVER || entry.kind == AIRPLANE
+                ? targetEnabled : !targetEnabled;
         ToggleState state = toLowPowerState
                 ? ToggleState.inactive() : ToggleState.active(true, true);
         TogglePlan plan = state.plan(
@@ -413,11 +517,43 @@ public final class MainActivity extends Activity {
                 entry.kind == WIFI,
                 entry.kind == BLUETOOTH,
                 entry.kind == SAVER);
-        String result = entry.label + " " + onOff(!entry.enabled);
-        runPlan(plan, false, result);
+        String result = entry.label + " " + onOff(targetEnabled);
+        DeferredBatterySaver.Decision saverDecision = entry.kind == SAVER
+                ? DeferredBatterySaver.individualAfterToggle(targetEnabled) : null;
+        runPlan(plan, false, result, entry.kind, targetEnabled, saverDecision);
     }
 
+
     private void runPlan(final TogglePlan plan, final boolean updateBundle, final String success) {
+        runPlan(plan, updateBundle, success, -1, false, null, null, false);
+    }
+
+    private void runPlan(final TogglePlan plan,
+                         final boolean updateBundle,
+                         final String success,
+                         final int expectedKind,
+                         final boolean expectedEnabled) {
+        runPlan(plan, updateBundle, success, expectedKind, expectedEnabled, null, null, false);
+    }
+
+    private void runPlan(final TogglePlan plan,
+                         final boolean updateBundle,
+                         final String success,
+                         final int expectedKind,
+                         final boolean expectedEnabled,
+                         final DeferredBatterySaver.Decision saverDecision) {
+        runPlan(plan, updateBundle, success, expectedKind, expectedEnabled,
+                saverDecision, null, false);
+    }
+
+    private void runPlan(final TogglePlan plan,
+                         final boolean updateBundle,
+                         final String success,
+                         final int expectedKind,
+                         final boolean expectedEnabled,
+                         final DeferredBatterySaver.Decision saverDecision,
+                         final ActiveSelectionSnapshot selectionSnapshot,
+                         final boolean disableModeAfterSuccess) {
         final boolean returnToQuickAction = quickAction.hasFocus();
         busy = true;
         status.setText("Applying…");
@@ -429,13 +565,19 @@ public final class MainActivity extends Activity {
                     RootShell.Result result = RootShell.run(ToggleCommand.build(plan));
                     if (!result.succeeded()) {
                         finishPlan(false, updateBundle, plan,
-                                "Change Failed • Settings Restored", returnToQuickAction);
+                                "Change Failed • Settings Restored", returnToQuickAction,
+                                expectedKind, expectedEnabled, saverDecision, selectionSnapshot,
+                                disableModeAfterSuccess);
                         return;
                     }
-                    finishPlan(true, updateBundle, plan, success, returnToQuickAction);
+                    finishPlan(true, updateBundle, plan, success, returnToQuickAction,
+                            expectedKind, expectedEnabled, saverDecision, selectionSnapshot,
+                            disableModeAfterSuccess);
                 } catch (Exception error) {
                     finishPlan(false, updateBundle, plan,
-                            "Change Failed • Check Magisk", returnToQuickAction);
+                            "Change Failed • Check Magisk", returnToQuickAction,
+                            expectedKind, expectedEnabled, saverDecision, selectionSnapshot,
+                            disableModeAfterSuccess);
                 }
             }
         }, "power-toggle").start();
@@ -445,17 +587,54 @@ public final class MainActivity extends Activity {
                             final boolean updateBundle,
                             final TogglePlan plan,
                             final String message,
-                            final boolean returnToQuickAction) {
+                            final boolean returnToQuickAction,
+                            final int expectedKind,
+                            final boolean expectedEnabled,
+                            final DeferredBatterySaver.Decision saverDecision,
+                            final ActiveSelectionSnapshot selectionSnapshot,
+                            final boolean disableModeAfterSuccess) {
         runOnUiThread(new Runnable() {
             @Override public void run() {
                 if (success && updateBundle) {
-                    prefs.edit().putBoolean(ACTIVE, plan.nextStateAfterSuccess().isActive()).apply();
+                    boolean nextActive = plan.nextStateAfterSuccess().isActive();
+                    SharedPreferences.Editor editor = prefs.edit().putBoolean(ACTIVE, nextActive);
+                    if (nextActive && selectionSnapshot != null) {
+                        editor.putBoolean(ACTIVE_SELECTION_VALID, true)
+                                .putBoolean(ACTIVE_AIRPLANE,
+                                        selectionSnapshot.selected(AIRPLANE))
+                                .putBoolean(ACTIVE_WIFI, selectionSnapshot.selected(WIFI))
+                                .putBoolean(ACTIVE_BLUETOOTH,
+                                        selectionSnapshot.selected(BLUETOOTH))
+                                .putBoolean(ACTIVE_SAVER, selectionSnapshot.selected(SAVER));
+                    } else if (!nextActive) {
+                        editor.putBoolean(ACTIVE_SELECTION_VALID, false);
+                    }
+                    editor.apply();
+                }
+                if (success && saverDecision != null) {
+                    prefs.edit()
+                            .putBoolean(DeferredBatterySaver.ARMED,
+                                    saverDecision.armedAfterSuccess())
+                            .putBoolean(DeferredBatterySaver.CHANGED_BY_APP,
+                                    saverDecision.changedByAppAfterSuccess())
+                            .apply();
+                }
+                if (success && disableModeAfterSuccess) {
+                    prefs.edit().putBoolean(TOGGLE_SELECTED_MODE, false).apply();
+                    SettingEntry mode = entries.get(MODE);
+                    mode.selected = false;
+                    mode.enabled = false;
                 }
                 busy = false;
                 listView.setEnabled(true);
-                quickAction.setEnabled(true);
+                updateActionAvailability();
                 refreshStates();
-                status.setText(message);
+                if (success && expectedKind >= 0) {
+                    entries.get(expectedKind).enabled = expectedEnabled;
+                    refreshVisibleRow(expectedKind);
+                    scheduleStateReconciliation();
+                }
+                showTransientStatus(message);
                 Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
                 if (returnToQuickAction) quickAction.requestFocus();
                 else listView.requestFocus();
@@ -463,9 +642,17 @@ public final class MainActivity extends Activity {
         });
     }
 
-    private void showChargingBlock() {
-        status.setText("Unplug USB • Nothing Changed");
-        Toast.makeText(this, "Unplug USB before enabling Battery Saver", Toast.LENGTH_LONG).show();
+    private void scheduleStateReconciliation() {
+        listView.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!busy) refreshStates();
+            }
+        }, 1500);
+        listView.postDelayed(new Runnable() {
+            @Override public void run() {
+                if (!busy) refreshStates();
+            }
+        }, 4500);
     }
 
     private boolean isExternallyPowered() {
@@ -478,7 +665,8 @@ public final class MainActivity extends Activity {
         int plugged = battery.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0);
         int batteryStatus = battery.getIntExtra(
                 BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN);
-        return plugged != 0 || batteryStatus == BatteryManager.BATTERY_STATUS_CHARGING;
+        return DeferredBatterySaver.externallyPoweredForEvent(
+                false, plugged, batteryStatus);
     }
 
     private void updateChargingWarning(boolean charging) {
@@ -497,24 +685,14 @@ public final class MainActivity extends Activity {
             if (event.getAction() == KeyEvent.ACTION_DOWN) {
                 if (event.getRepeatCount() == 0) {
                     centerDown = true;
-                    longPressTriggered = false;
                     centerKeyCode = keyCode;
-                } else if (!configMode && !busy) {
-                    if (centerDown && !longPressTriggered) {
-                        longPressTriggered = true;
-                        enterConfigMode();
-                    } else if (!longPressTriggered) {
-                        longPressTriggered = true;
-                        enterConfigMode();
-                    }
                 }
                 return true;
             }
             if (event.getAction() == KeyEvent.ACTION_UP && centerDown && keyCode == centerKeyCode) {
                 centerDown = false;
                 centerKeyCode = -1;
-                if (!longPressTriggered) performShortCenter();
-                longPressTriggered = false;
+                performShortCenter();
                 return true;
             }
         }
@@ -529,8 +707,14 @@ public final class MainActivity extends Activity {
             } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN
                     && listView.hasFocus()
                     && listView.getSelectedItemPosition() == entries.size() - 1
+                    && isToggleSelectedMode()
                     && quickAction != null
                     && quickAction.requestFocus()) {
+                return true;
+            } else if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN
+                    && listView.hasFocus()
+                    && listView.getSelectedItemPosition() == entries.size() - 1
+                    && !isToggleSelectedMode()) {
                 return true;
             }
         }
@@ -540,8 +724,7 @@ public final class MainActivity extends Activity {
     private void performShortCenter() {
         if (busy) return;
         if (quickAction != null && quickAction.hasFocus()) {
-            if (configMode) saveOptions();
-            else toggleQuickOptions();
+            toggleQuickOptions();
             return;
         }
         if (listView != null && listView.hasFocus()) {
@@ -551,8 +734,7 @@ public final class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (configMode) cancelConfig();
-        else super.onBackPressed();
+        super.onBackPressed();
     }
 
     private TextView textView(String text, int sizeSp, int gravity) {
@@ -652,25 +834,25 @@ public final class MainActivity extends Activity {
             super(MainActivity.this);
             setOrientation(HORIZONTAL);
             setGravity(Gravity.CENTER_VERTICAL);
-            setPadding(dp(9), dp(2), dp(6), dp(2));
-            setMinimumHeight(dp(44));
+            setPadding(dp(9), dp(1), dp(6), dp(1));
+            setMinimumHeight(dp(35));
             setBackground(rowBackground());
 
             icon = new ImageView(MainActivity.this);
             icon.setScaleType(ImageView.ScaleType.FIT_CENTER);
-            addView(icon, new LinearLayout.LayoutParams(dp(32), dp(32)));
+            addView(icon, new LinearLayout.LayoutParams(dp(27), dp(27)));
 
-            label = textView("", 17, Gravity.CENTER_VERTICAL);
+            label = textView("", 16, Gravity.CENTER_VERTICAL);
             label.setTextColor(rowTextColors());
             label.setDuplicateParentStateEnabled(true);
             label.setPadding(dp(8), 0, dp(3), 0);
-            addView(label, new LinearLayout.LayoutParams(0, dp(34), 1f));
+            addView(label, new LinearLayout.LayoutParams(0, dp(30), 1f));
 
             state = textView("", 14, Gravity.CENTER);
             state.setTextColor(rowTextColors());
             state.setDuplicateParentStateEnabled(true);
             state.setPadding(dp(2), 0, dp(2), 0);
-            addView(state, new LinearLayout.LayoutParams(dp(40), dp(32)));
+            addView(state, new LinearLayout.LayoutParams(dp(40), dp(30)));
 
             checkbox = new CheckBox(MainActivity.this);
             checkbox.setDuplicateParentStateEnabled(true);
@@ -683,12 +865,30 @@ public final class MainActivity extends Activity {
 
         void bind(SettingEntry entry) {
             icon.setImageResource(entry.iconResource);
+            icon.setAlpha(entry.enabled ? 1f : 0.35f);
             label.setText(entry.label);
-            state.setText(onOff(entry.enabled));
-            checkbox.setChecked(entry.selected);
-            checkbox.setAlpha(configMode ? 1f : 0.75f);
-            setContentDescription(entry.label + " " + onOff(entry.enabled)
-                    + (entry.selected ? ", quick option" : ""));
+            boolean modeRow = entry.kind == MODE;
+            boolean toggleSelectedMode = isToggleSelectedMode();
+            boolean saverArmed = entry.kind == SAVER && !toggleSelectedMode
+                    && prefs.getBoolean(DeferredBatterySaver.ARMED, false);
+            state.setVisibility(modeRow || OptionInteraction.showLiveStateColumn(
+                    toggleSelectedMode) ? VISIBLE : GONE);
+            String displayedState = modeRow
+                    ? OptionInteraction.modeLabel(entry.enabled)
+                    : (saverArmed && !entry.enabled ? "Armed" : onOff(entry.enabled));
+            state.setText(displayedState);
+            boolean checkboxChecked = modeRow
+                    ? entry.selected
+                    : OptionInteraction.checkboxChecked(
+                            toggleSelectedMode, entry.selected,
+                            entry.kind == WIFI || entry.kind == BLUETOOTH,
+                            entry.enabled);
+            if (saverArmed) checkboxChecked = true;
+            checkbox.setChecked(checkboxChecked);
+            checkbox.setAlpha(1f);
+            String selectionDescription = toggleSelectedMode && !modeRow
+                    ? (entry.selected ? ", selected item" : ", not selected") : "";
+            setContentDescription(entry.label + " " + displayedState + selectionDescription);
         }
     }
 
