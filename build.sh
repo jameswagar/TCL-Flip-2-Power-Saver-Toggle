@@ -12,7 +12,7 @@ ANDROID_JAR="$SDK_ROOT/platforms/android-$ANDROID_PLATFORM_VERSION/android.jar"
 KEYSTORE="${POWER_SAVER_KEYSTORE:-$ROOT/power-saver-release.jks}"
 KEY_ALIAS="${POWER_SAVER_KEY_ALIAS:-power-saver}"
 PASS_FILE="${POWER_SAVER_PASS_FILE:-$ROOT/.signing-password}"
-APK="$DIST/PowerSaver-v1.0.2.apk"
+APK="$DIST/PowerSaver-v1.0.3.apk"
 
 for tool in aapt2 d8 zipalign apksigner; do
   [[ -x "$BT/$tool" ]] || {
@@ -64,8 +64,8 @@ fi
   --manifest "$ROOT/AndroidManifest.xml" \
   --min-sdk-version 24 \
   --target-sdk-version 30 \
-  --version-code 3 \
-  --version-name 1.0.2 \
+  --version-code 4 \
+  --version-name 1.0.3 \
   "$BUILD/resources.zip" \
   --java "$BUILD/generated"
 

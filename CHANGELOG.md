@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3 — 2026-07-31
+
+- Show the phone's live battery percentage directly beneath the **Power Saver** title.
+- Keep the title, battery percentage, and interaction-mode status evenly spaced on the 240×320 display.
+- Size the battery line from its rendered font metrics so the percentage is not clipped.
+- Refresh the public app screenshot from the verified 4058L interface.
+
 ## 1.0.2 — 2026-07-25
 
 - Add selectable Airplane Mode above Wi-Fi.

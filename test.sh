@@ -34,6 +34,10 @@ java -cp "$OUT" com.dumbphone.powertoggle.DeferredBatterySaverTest
 java -cp "$OUT" com.dumbphone.powertoggle.ActiveSelectionSnapshotTest
 java -cp "$OUT" com.dumbphone.powertoggle.BatteryLevelDisplayTest
 
+grep -Fq "APK=\"\$DIST/PowerSaver-v1.0.3.apk\"" "$ROOT/build.sh"
+grep -q -- '--version-code 4' "$ROOT/build.sh"
+grep -q -- '--version-name 1.0.3' "$ROOT/build.sh"
+
 if ! grep -q 'batteryLayout.setMargins(0, 0, 0, dp(1))' \
     "$ROOT/src/com/dumbphone/powertoggle/MainActivity.java"; then
   echo 'FAIL title, battery percentage, and mode status need equal visual spacing' >&2

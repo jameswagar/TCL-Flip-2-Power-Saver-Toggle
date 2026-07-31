@@ -4,7 +4,7 @@ A compact, D-pad-friendly Android utility for rooted TCL Flip 2 phones. Power Sa
 
 ![Power Saver running on a TCL Flip 2](docs/images/power-saver.png)
 
-![Version](https://img.shields.io/badge/version-1.0.2-blue)
+![Version](https://img.shields.io/badge/version-1.0.3-blue)
 ![Android](https://img.shields.io/badge/Android-11-green)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey)
 
@@ -14,6 +14,7 @@ A compact, D-pad-friendly Android utility for rooted TCL Flip 2 phones. Power Sa
 - Airplane Mode powers off cellular service while restoring unselected Wi-Fi and Bluetooth radios to their prior state.
 - Restore selected Wi-Fi and Bluetooth radios to their normal on state on the reverse toggle.
 - Arm selected Battery Saver while USB/external power is connected, then activate it automatically when external power is removed.
+- Show the live battery percentage directly beneath the app title.
 - Update Airplane Mode, Wi-Fi, Bluetooth, and Battery Saver status live while the app is open, including changes made through Android's native settings screens.
 - Verify the requested system state and attempt rollback when verification fails.
 - Keypad and D-pad navigation designed for the TCL Flip 2's 240×320 display.
@@ -37,11 +38,11 @@ Review the source before granting root. The app accepts no command text, paths, 
 
 ## Install
 
-1. Download `PowerSaver-v1.0.2.apk` from the [v1.0.2 release](https://github.com/jameswagar/TCL-Flip-2-Power-Saver-Toggle/releases/tag/v1.0.2).
+1. Download `PowerSaver-v1.0.3.apk` from the [v1.0.3 release](https://github.com/jameswagar/TCL-Flip-2-Power-Saver-Toggle/releases/tag/v1.0.3).
 2. Transfer and install it:
 
    ```sh
-   adb install PowerSaver-v1.0.2.apk
+   adb install PowerSaver-v1.0.3.apk
    ```
 
 3. Open **Power Saver** and approve the Magisk Superuser request.
@@ -65,7 +66,7 @@ The build intentionally avoids Gradle. It requires:
 ./build.sh
 ```
 
-The APK is written to `dist/PowerSaver-v1.0.2.apk`.
+The APK is written to `dist/PowerSaver-v1.0.3.apk`.
 
 On the first build, the script creates a local signing keystore and a random signing password. Both are excluded by `.gitignore`. Preserve them securely if you want future builds to update an already-installed copy. You can instead provide:
 
@@ -82,7 +83,7 @@ Build tools/platforms can be overridden with `BUILD_TOOLS_VERSION` and `ANDROID_
 ./test.sh
 ```
 
-The host-side tests cover reversible Airplane Mode and radio planning, staged and active selections, individual/group interaction, charging and deferred Battery Saver behavior, shell construction and ordering, verification markers, and rollback construction.
+The host-side tests cover reversible Airplane Mode and radio planning, staged and active selections, individual/group interaction, charging and deferred Battery Saver behavior, battery-percentage formatting and layout guards, shell construction and ordering, verification markers, and rollback construction.
 
 ## Safety notes
 
