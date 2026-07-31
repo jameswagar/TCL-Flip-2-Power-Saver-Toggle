@@ -57,6 +57,7 @@ public final class MainActivity extends Activity {
     private final List<SettingEntry> entries = new ArrayList<>();
     private SharedPreferences prefs;
     private ListView listView;
+    private TextView batteryLevel;
     private TextView status;
     private TextView quickAction;
     private TextView chargingWarning;
@@ -72,6 +73,9 @@ public final class MainActivity extends Activity {
         @Override public void onReceive(Context context, Intent intent) {
             if (Intent.ACTION_POWER_DISCONNECTED.equals(intent.getAction())) {
                 BatterySaverPowerReceiver.activateIfArmedAsync(context);
+            }
+            if (Intent.ACTION_BATTERY_CHANGED.equals(intent.getAction())) {
+                updateBatteryLevel(intent);
             }
             updateChargingWarning(isExternallyPowered(intent));
         }
@@ -154,6 +158,14 @@ public final class MainActivity extends Activity {
         root.addView(titleRow, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(40)));
 
+        batteryLevel = textView("Battery: --%", 14, Gravity.CENTER);
+        batteryLevel.setTextColor(Color.WHITE);
+        batteryLevel.setMinHeight(dp(22));
+        LinearLayout.LayoutParams batteryLayout = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        batteryLayout.setMargins(0, 0, 0, dp(1));
+        root.addView(batteryLevel, batteryLayout);
+
         status = textView("Ready", 13, Gravity.CENTER);
         status.setTextColor(Color.WHITE);
         status.setPadding(dp(8), dp(2), dp(8), dp(2));
@@ -201,7 +213,10 @@ public final class MainActivity extends Activity {
         batteryEvents.addAction(Intent.ACTION_POWER_DISCONNECTED);
         Intent battery = registerReceiver(batteryReceiver, batteryEvents);
         batteryReceiverRegistered = true;
-        if (battery != null) updateChargingWarning(isExternallyPowered(battery));
+        if (battery != null) {
+            updateBatteryLevel(battery);
+            updateChargingWarning(isExternallyPowered(battery));
+        }
 
         IntentFilter radios = new IntentFilter();
         radios.addAction(Intent.ACTION_AIRPLANE_MODE_CHANGED);
@@ -658,6 +673,13 @@ public final class MainActivity extends Activity {
     private boolean isExternallyPowered() {
         Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         return isExternallyPowered(battery);
+    }
+
+    private void updateBatteryLevel(Intent battery) {
+        if (batteryLevel == null || battery == null) return;
+        int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+        int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, 0);
+        batteryLevel.setText(BatteryLevelDisplay.format(level, scale));
     }
 
     private boolean isExternallyPowered(Intent battery) {

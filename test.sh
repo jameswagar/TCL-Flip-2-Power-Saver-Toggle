@@ -16,13 +16,15 @@ javac --release 8 -Xlint:-options -d "$OUT" \
   "$ROOT/src/com/dumbphone/powertoggle/OptionInteraction.java" \
   "$ROOT/src/com/dumbphone/powertoggle/DeferredBatterySaver.java" \
   "$ROOT/src/com/dumbphone/powertoggle/ActiveSelectionSnapshot.java" \
+  "$ROOT/src/com/dumbphone/powertoggle/BatteryLevelDisplay.java" \
   "$ROOT/tests/com/dumbphone/powertoggle/ToggleStateTest.java" \
   "$ROOT/tests/com/dumbphone/powertoggle/ToggleCommandTest.java" \
   "$ROOT/tests/com/dumbphone/powertoggle/PowerPreconditionTest.java" \
   "$ROOT/tests/com/dumbphone/powertoggle/AirplaneModePlanTest.java" \
   "$ROOT/tests/com/dumbphone/powertoggle/OptionInteractionTest.java" \
   "$ROOT/tests/com/dumbphone/powertoggle/DeferredBatterySaverTest.java" \
-  "$ROOT/tests/com/dumbphone/powertoggle/ActiveSelectionSnapshotTest.java"
+  "$ROOT/tests/com/dumbphone/powertoggle/ActiveSelectionSnapshotTest.java" \
+  "$ROOT/tests/com/dumbphone/powertoggle/BatteryLevelDisplayTest.java"
 java -cp "$OUT" com.dumbphone.powertoggle.ToggleStateTest
 java -cp "$OUT" com.dumbphone.powertoggle.ToggleCommandTest
 java -cp "$OUT" com.dumbphone.powertoggle.PowerPreconditionTest
@@ -30,7 +32,23 @@ java -cp "$OUT" com.dumbphone.powertoggle.AirplaneModePlanTest
 java -cp "$OUT" com.dumbphone.powertoggle.OptionInteractionTest
 java -cp "$OUT" com.dumbphone.powertoggle.DeferredBatterySaverTest
 java -cp "$OUT" com.dumbphone.powertoggle.ActiveSelectionSnapshotTest
+java -cp "$OUT" com.dumbphone.powertoggle.BatteryLevelDisplayTest
 
+if ! grep -q 'batteryLayout.setMargins(0, 0, 0, dp(1))' \
+    "$ROOT/src/com/dumbphone/powertoggle/MainActivity.java"; then
+  echo 'FAIL title, battery percentage, and mode status need equal visual spacing' >&2
+  exit 1
+fi
+if ! grep -q 'batteryLevel.setMinHeight(dp(22))' \
+    "$ROOT/src/com/dumbphone/powertoggle/MainActivity.java"; then
+  echo 'FAIL battery percentage needs enough line height to avoid clipping' >&2
+  exit 1
+fi
+if ! grep -A5 'batteryLevel = textView' "$ROOT/src/com/dumbphone/powertoggle/MainActivity.java" \
+    | grep -q 'ViewGroup.LayoutParams.WRAP_CONTENT'; then
+  echo 'FAIL battery percentage height must follow its rendered font metrics' >&2
+  exit 1
+fi
 
 grep -q 'TOGGLE_INDIVIDUAL' "$ROOT/src/com/dumbphone/powertoggle/MainActivity.java"
 grep -q 'toggleOne(' "$ROOT/src/com/dumbphone/powertoggle/MainActivity.java"
